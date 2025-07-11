@@ -5,6 +5,7 @@ SPRITE_0_ADDR = oam + 0
 SPRITE_1_ADDR = oam + 4
 SPRITE_2_ADDR = oam + 8
 SPRITE_3_ADDR = oam + 12
+SPRITE_BALL_ADDR = oam + 16
 
 ;*****************************************************************
 ; Define NES cartridge Header
@@ -14,7 +15,7 @@ SPRITE_3_ADDR = oam + 12
 .byte 'N', 'E', 'S', $1a      ; "NES" followed by MS-DOS EOF marker
 .byte $02                     ; 2 x 16KB PRG-ROM banks
 .byte $01                     ; 1 x 8KB CHR-ROM bank
-.byte $00, $00                ; Mapper 0, no special features
+.byte $01, $00                ; Mapper 0, no special features
 
 ;*****************************************************************
 ; Define NES interrupt vectors
@@ -57,6 +58,10 @@ controller_1_released:  .res 1    ; Check if released
 game_state:             .res 1    ; Current game state
 player_x:               .res 1    ; Player X position
 player_y:               .res 1    ; Player Y position
+ball_x:                 .res 1    ; Ball X position
+ball_y:                 .res 1    ; Ball Y position
+ball_dx:                .res 1    ; Ball X velocity
+ball_dy:                .res 1    ; Ball Y velocity
 player_vel_x:           .res 1    ; Player X velocity
 player_vel_y:           .res 1    ; Player Y velocity
 score:                  .res 1    ; Score low byte
@@ -64,7 +69,7 @@ scroll:                 .res 1    ; Scroll screen
 time:                   .res 1    ; Time (60hz = 60 FPS)
 seconds:                .res 1    ; Seconds
 ; Reserve remaining space in this section if needed
-                        .res 07   ; Pad to $30 (optional)
+                        .res 05   ; Pad to $30 (optional)
 
 ;*****************************************************************
 ; OAM (Object Attribute Memory) ($0200–$02FF)
@@ -91,6 +96,28 @@ oam: .res 256	; sprite OAM data
 
 ; Non-Maskable Interrupt Handler - called during VBlank
 .proc nmi_handler
+    ; Save registers that will be used
+    PHA
+    TXA
+    PHA
+    TYA
+    PHA
+
+    INC time ; incerement time by 1
+    LDA time ; load time
+    CMP #60 ; compare with 60 (1 second)
+    BCC skip ; if less than 60, skip incrementing seconds
+    BNE skip ; if not equal to 60, skip incrementing seconds
+      INC seconds ; increment seconds
+      LDA #0 ; reset time
+      STA time
+    skip:
+
+    PLA
+    TAY
+    PLA
+    TAX
+    PLA
 
   RTI                     ; Return from interrupt (not using NMI yet)
 .endproc
@@ -198,6 +225,25 @@ remaining_loop:
 .endproc
 
 .proc init_sprites
+
+  LDA #128
+  STA ball_x
+  LDA #100
+  STA ball_y
+
+  LDA #1
+  STA ball_dx
+  LDA #1
+  STA ball_dy
+
+  LDX #0
+  load_sprite:
+    LDA sprite_data, X
+    STA SPRITE_0_ADDR, X
+    INX
+    CPX #4
+    BEQ load_sprite
+
   ; set sprite tiles
   LDA #1
   STA SPRITE_0_ADDR + SPRITE_OFFSET_TILE
@@ -207,6 +253,8 @@ remaining_loop:
   STA SPRITE_2_ADDR + SPRITE_OFFSET_TILE
   LDA #4
   STA SPRITE_3_ADDR + SPRITE_OFFSET_TILE
+  LDA #6
+  STA SPRITE_BALL_ADDR + SPRITE_OFFSET_TILE
 
   LDA #190
   STA player_y
@@ -245,6 +293,13 @@ remaining_loop:
   ADC #8
   STA SPRITE_2_ADDR + SPRITE_OFFSET_Y
   STA SPRITE_3_ADDR + SPRITE_OFFSET_Y
+
+  ; BALL SPRITE POSITIONING
+  LDA ball_y
+  STA SPRITE_BALL_ADDR + SPRITE_OFFSET_Y
+
+  LDA ball_x
+  STA SPRITE_BALL_ADDR + SPRITE_OFFSET_X
 
 
   ;DEC scroll
@@ -303,6 +358,42 @@ not_left:
     RTS                       ; Return to caller
 .endproc
 
+.proc update_ball
+
+; now move our ball
+ 	lda ball_y; get the current Y
+	clc
+	adc ball_dy ; add the Y velocity
+ 	sta ball_y ; write the change
+ 	cmp #0 ; have we hit the top border
+ 	bne NOT_HITTOP
+ 		lda #1 ; reverse direction
+ 		sta ball_dy
+ NOT_HITTOP:
+ 	lda ball_y
+ 	cmp #210 ; have we hit the bottom border
+ 	bne NOT_HITBOTTOM
+ 		lda #$FF ; reverse direction (-1)
+ 		sta ball_dy
+ NOT_HITBOTTOM:
+ 	lda ball_x ; get the current x
+ 	clc
+ 	adc ball_dx ; add the X velocity
+ 	sta ball_x ; write the change
+ 	cmp #0 ; have we hit the left border
+ 	bne NOT_HITLEFT
+ 		lda #1 ; reverse direction
+ 		sta ball_dx
+ NOT_HITLEFT:
+ 	lda ball_x
+ 	cmp #248 ; have we hit the right border
+ 	bne NOT_HITRIGHT
+ 		lda #$FF ; reverse direction (-1)
+ 		sta ball_dx
+ NOT_HITRIGHT:
+  RTS
+ .endproc
+
 ;******************************************************************************
 ; Procedure: main
 ;------------------------------------------------------------------------------
@@ -310,6 +401,7 @@ not_left:
 ; Initializes PPU control settings, enables rendering, and enters
 ; an infinite loop where it waits for VBlank and updates sprite data.
 ;******************************************************************************
+
 .proc main
     ; seed the random number
     LDA #$45
@@ -339,6 +431,7 @@ forever:
     ; Read controller
     JSR read_controller
     JSR update_player
+    JSR update_ball
 
     ; Update sprite data (DMA transfer to PPU OAM)
     JSR update_sprites
@@ -441,6 +534,11 @@ palette_data:
 ; Load nametable data
 nametable_data:
   .incbin "assets/screen.nam"
+sprite_data:
+  .byte 30, 1, 0, 40
+  .byte 30, 2, 0, 48
+  .byte 38, 3, 0, 40
+  .byte 38, 4, 0, 40
 
 hello_txt:
 .byte 'H','E','L','L','O',' ','W','O','R','L','D', 0
