@@ -9773,6 +9773,14 @@
       },
       {
         "RomFile": {
+          "Path": "C:\\Users\\csinclair\\Desktop\\Neumont Documents\\GameEngineProjects\\Retro\\projects/builds/pong.nes",
+          "InnerFile": "",
+          "InnerFileIndex": 0
+        },
+        "PatchFile": null
+      },
+      {
+        "RomFile": {
           "Path": "C:\\Users\\csinclair\\Desktop\\Neumont Documents\\GameEngineProjects\\Retro\\projects/builds/controller.nes",
           "InnerFile": "",
           "InnerFileIndex": 0

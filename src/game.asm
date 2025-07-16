@@ -38,10 +38,14 @@ temp_var:               .res 1    ; General purpose temp variable
 temp_var2:              .res 1    ; Second temp variable
 temp_ptr_low:           .res 1    ; 16-bit pointer (2 bytes)
 temp_ptr_high:          .res 1    ; 16-bit pointer (2 bytes)
+temp_speed:             .res 1    ; Temporary storage for movement speed
+temp1:                  .res 1
+temp_pos:               .res 1    ; Temporary position storage for signed addition
 random_num:             .res 1    ; Random number generator value
+bounce_cooldown:        .res 1
 
 ; Reserve remaining space in this section if needed
-                        .res 11   ; Pad to $10 (optional - depends on your needs)
+                        .res 11   ; Pad to $10 (optional)
 
 ; $10-$1F: Controller input
 controller_1:           .res 1    ; Current frame controller 1 state
@@ -233,8 +237,9 @@ remaining_loop:
 
   LDA #1
   STA ball_dx
-  LDA #1
+  LDA #$F2     ; set ball_dy = -8
   STA ball_dy
+
 
   LDX #0
   load_sprite:
@@ -323,76 +328,239 @@ remaining_loop:
 
 .proc update_player
     LDA controller_1
+    AND #PAD_B
+    BEQ no_boost
+        LDA #4          ; boost speed
+        JMP store_speed
+no_boost:
+    LDA #2              ; normal speed
+store_speed:
+    STA temp_speed      ; store current speed in a temp var
+
+    ; Move left
+    LDA controller_1
     AND #PAD_L
     BEQ not_left
-      LDA player_x
-      ;DEX
-      SEC
-      SBC #$01
-      STA player_x
+        LDA player_x
+        SEC
+        SBC temp_speed
+        STA player_x
 not_left:
+
+    ; Move right
     LDA controller_1
     AND #PAD_R
     BEQ not_right
-      LDA player_x
-      CLC
-      ADC #$01
-      STA player_x
-  not_right:
+        LDA player_x
+        CLC
+        ADC temp_speed
+        STA player_x
+not_right:
+
+    ; Move up
     LDA controller_1
     AND #PAD_U
     BEQ not_up
-      LDA player_y
-      SEC
-      SBC #$01
-      STA player_y
-  not_up:
+        LDA player_y
+        SEC
+        SBC temp_speed
+        STA player_y
+not_up:
+
+    ; Move down
     LDA controller_1
     AND #PAD_D
     BEQ not_down
-      LDA player_y
-      CLC
-      ADC #$01
-      STA player_y
-  not_down:
-    RTS                       ; Return to caller
+        LDA player_y
+        CLC
+        ADC temp_speed
+        STA player_y
+not_down:
+
+    RTS
 .endproc
+
+
 
 .proc update_ball
 
-; now move our ball
- 	lda ball_y; get the current Y
-	clc
-	adc ball_dy ; add the Y velocity
- 	sta ball_y ; write the change
- 	cmp #0 ; have we hit the top border
- 	bne NOT_HITTOP
- 		lda #1 ; reverse direction
- 		sta ball_dy
- NOT_HITTOP:
- 	lda ball_y
- 	cmp #210 ; have we hit the bottom border
- 	bne NOT_HITBOTTOM
- 		lda #$FF ; reverse direction (-1)
- 		sta ball_dy
- NOT_HITBOTTOM:
- 	lda ball_x ; get the current x
- 	clc
- 	adc ball_dx ; add the X velocity
- 	sta ball_x ; write the change
- 	cmp #0 ; have we hit the left border
- 	bne NOT_HITLEFT
- 		lda #1 ; reverse direction
- 		sta ball_dx
- NOT_HITLEFT:
- 	lda ball_x
- 	cmp #248 ; have we hit the right border
- 	bne NOT_HITRIGHT
- 		lda #$FF ; reverse direction (-1)
- 		sta ball_dx
- NOT_HITRIGHT:
-  RTS
- .endproc
+    ; === Apply gravity ===
+    LDA ball_dy
+    CLC
+    ADC #1
+    STA ball_dy
+
+    ; === Apply horizontal movement ===
+    LDA ball_dx
+    BMI ball_left
+    ; Moving right
+    CLC
+    ADC ball_x
+    STA ball_x
+    JMP ball_y_move
+
+ball_left:
+    ; ball_dx is negative, convert to abs
+    LDA ball_dx
+    EOR #$FF
+    CLC
+    ADC #1
+    STA temp1
+    LDA ball_x
+    SEC
+    SBC temp1
+    STA ball_x
+
+ball_y_move:
+    ; === Apply vertical movement ===
+    LDA ball_dy
+    BMI move_up
+    ; Moving down
+    CLC
+    ADC ball_y
+    STA ball_y
+    JMP check_player_collision
+
+move_up:
+    ; ball_dy is negative, convert to abs
+    LDA ball_dy
+    EOR #$FF
+    CLC
+    ADC #1
+    STA temp1
+    LDA ball_y
+    SEC
+    SBC temp1
+    STA ball_y
+
+check_player_collision:
+
+    ; === Ball bounding box ===
+    LDA ball_x
+    STA temp_var          ; ball left
+    CLC
+    ADC #7
+    STA temp_var2         ; ball right
+
+    LDA ball_y
+    STA temp_pos          ; ball top
+    CLC
+    ADC #7
+    STA temp1             ; ball bottom
+
+    ; === Player bounding box ===
+    LDA player_x
+    STA temp_ptr_low      ; player left
+    CLC
+    ADC #15
+    STA temp_ptr_high     ; player right
+
+    LDA player_y
+    STA random_num        ; player top
+    CLC
+    ADC #15
+    STA temp_speed        ; player bottom
+
+    ; === Check if ball overlaps player vertically ===
+    LDA temp1
+    CMP random_num
+    BCC check_floor
+
+    LDA temp_pos
+    CMP temp_speed
+    BCS check_floor
+
+    ; === Check if ball overlaps player horizontally ===
+    LDA temp_var2
+    CMP temp_ptr_low
+    BCC check_floor
+
+    LDA temp_var
+    CMP temp_ptr_high
+    BCS check_floor
+
+    ; === Bounce vertically if falling ===
+    LDA ball_dy
+    BMI check_horizontal_bounce
+
+    ; Invert Y velocity
+    LDA ball_dy
+    EOR #$FF
+    CLC
+    ADC #1
+    STA ball_dy
+
+    ; Nudge up
+    LDA player_y
+    SEC
+    SBC #8
+    STA ball_y
+
+check_horizontal_bounce:
+    ; Ball hit left or right side of player
+    ; Bounce X if ball touches close to edge
+    ; Left side check
+    LDA ball_x
+    CLC
+    ADC #3
+    CMP player_x
+    BCC bounce_left
+
+    ; Right side check
+    LDA ball_x
+    CLC
+    ADC #5
+    CMP player_x
+    BCS bounce_right
+
+    JMP done
+
+bounce_left:
+    ; Ball hit player's left edge — bounce left
+    LDA ball_dx
+    BMI skip_left_invert
+    LDA ball_dx
+    EOR #$FF
+    CLC
+    ADC #1
+    STA ball_dx
+skip_left_invert:
+    JMP done
+
+bounce_right:
+    ; Ball hit player's right edge — bounce right
+    LDA ball_dx
+    BPL skip_right_invert
+    LDA ball_dx
+    EOR #$FF
+    CLC
+    ADC #1
+    STA ball_dx
+skip_right_invert:
+    JMP done
+
+check_floor:
+    LDA ball_y
+    CMP #210
+    BCC done
+
+    LDA #210
+    STA ball_y
+
+    ; Bounce up from floor
+    LDA ball_dy
+    EOR #$FF
+    CLC
+    ADC #1
+    STA ball_dy
+
+done:
+    RTS
+
+.endproc
+
+
+
 
 ;******************************************************************************
 ; Procedure: main
@@ -432,6 +600,7 @@ forever:
     JSR read_controller
     JSR update_player
     JSR update_ball
+
 
     ; Update sprite data (DMA transfer to PPU OAM)
     JSR update_sprites
